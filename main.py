@@ -3,6 +3,7 @@ import json
 import re
 from tqdm import tqdm
 from concurrent.futures import ThreadPoolExecutor
+from googletrans import Translator
 
 
 class GDCVaultHelper:
@@ -36,7 +37,8 @@ class GDCVaultHelper:
 
         conference_section = re.match(r'.*?<section class="conference">(.*?)</section>', raw, re.DOTALL).groups(1)[0]
 
-        list_items = re.findall(r'<li class="featured " count="" sponsor_id="" hide_sponsor="">(.*?)</li>', conference_section, re.DOTALL)
+        list_items = re.findall(r'<li class="featured " count="" sponsor_id="" hide_sponsor="">(.*?)</li>',
+                                conference_section, re.DOTALL)
 
         for raw_vault in list_items:
             vault = {}
@@ -91,7 +93,7 @@ class GDCVaultHelper:
         for k, v in self.vault_classifications.items():
             print(f"{k}: {v}")
 
-    def Filter(self, classifications):
+    def Filter(self, classifications) -> dict:
         filtered = {"vaults": []}
         for v in self.vault_list["vaults"]:
             if v["trackname"] in classifications:
@@ -99,16 +101,41 @@ class GDCVaultHelper:
 
         filtered["vaults"] = sorted(filtered["vaults"], key=lambda x: x["trackname"])
 
-        with open(f"GDC{self.year}_filtered.json", "w", encoding="utf-8") as f:
-            f.write(json.dumps(filtered, indent=4))
-            f.close()
+        return filtered
+
+
+def TranslateOverview(tobe_translated: dict):
+    translator = Translator()
+
+    def T(_index):
+        return _index, translator.translate(tobe_translated["vaults"][_index]["overview"], dest='zh-cn').text
+
+    # the code below is slow, let's use multi-threading to speed up the translation
+    with ThreadPoolExecutor(max_workers=16) as executor:
+        futures = [executor.submit(T, i) for i in range(len(tobe_translated["vaults"]))]
+        for future in tqdm(futures):
+            # future might not respond, lets catch the exception, and skip it
+            try:
+                index, text = future.result()
+                tobe_translated["vaults"][index]["translated"] = text
+            except Exception as e:
+                print(e)
+                continue
+
+    return tobe_translated
 
 
 if __name__ == "__main__":
     helper = GDCVaultHelper()
     # helper.DumpGDC(23, with_overview=True)
-    helper.LoadGDC(23)
+    helper.LoadGDC(24)
     helper.ShowClassifications()
-    helper.Filter(["Programming", "Design", "Visual Arts",
-                   "Advanced Graphics Summit", "Tools Summit",
-                   "Animation Summit"])
+    filtered = helper.Filter(["Programming", "Design", "Visual Arts",
+                              "Advanced Graphics Summit", "Tools Summit",
+                              "Animation Summit"])
+
+    translated = TranslateOverview(filtered)
+
+    with open(f"GDC{helper.year}_filtered.json", "w", encoding="utf-8") as f:
+        f.write(json.dumps(translated, indent=4, ensure_ascii=False))
+        f.close()
